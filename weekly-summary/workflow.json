@@ -1,0 +1,524 @@
+{
+  "name": "Send a weekly summary of open quotes to follow up with Gmail",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "name": "Every Monday",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        160
+      ],
+      "id": "aa4505a8-b413-4e46-ac05-a6f53961ceea"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "14f1949d-af61-4ea8-a9e8-3eb6afd28fc6",
+              "name": "business_name",
+              "value": "Your Business Name",
+              "type": "string"
+            },
+            {
+              "id": "6e6a1cad-ee7b-43ec-8d1e-479d89fb2db8",
+              "name": "owner_email",
+              "value": "you@example.com",
+              "type": "string"
+            },
+            {
+              "id": "d312bb75-b45d-41dc-9328-8d33469f2a43",
+              "name": "currency",
+              "value": "$",
+              "type": "string"
+            },
+            {
+              "id": "ea3de968-e820-4df1-ab05-7df50b2a381d",
+              "name": "timezone",
+              "value": "America/New_York",
+              "type": "string"
+            },
+            {
+              "id": "c88dac20-7862-4429-873a-048d77889e0f",
+              "name": "old_after_days",
+              "value": 14,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        280,
+        -160
+      ],
+      "id": "081f488e-7ac0-4586-beab-6119f6782bf1"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Requests"
+        },
+        "options": {}
+      },
+      "name": "Read all quotes",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        520,
+        160
+      ],
+      "id": "9303e74b-6efd-4af7-b52f-75a9670938fd",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Groups every row by status and builds the weekly email.\n// \"Closed this week\" = won or lost rows that have no closed_at yet. They get stamped after the email,\n// so each closed quote is counted in exactly one weekly summary.\nconst s = $('Settings').first().json;\nconst tz = s.timezone;\nconst now = DateTime.now().setZone(tz);\nconst rows = $input.all().map(i => i.json).filter(r => r.request_id);\n\nconst WAITING = ['missing_info', 'ready_to_quote'];\nconst OPEN = ['quote_sent', 'review', 'replied'];\nconst WON = ['accepted', 'booking_sent', 'scheduled'];\nconst LOST = ['lost', 'no_reply'];\n\nconst money = v => {\n  const n = Number(String(v ?? '').replace(/[^0-9.\\-]/g, ''));\n  return Number.isFinite(n) ? n : 0;\n};\nconst fmt = n => s.currency + n.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 });\nconst age = r => {\n  const d = DateTime.fromISO(String(r.quote_sent_at || r.received_at || ''), { zone: tz });\n  return d.isValid ? Math.floor(now.diff(d, 'days').days) : null;\n};\nconst esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\nconst waiting = rows.filter(r => WAITING.includes(r.status));\nconst open = rows.filter(r => OPEN.includes(r.status)).map(r => ({ ...r, age: age(r) }));\nconst closedNow = rows.filter(r => [...WON, ...LOST].includes(r.status) && !r.closed_at);\nconst won = closedNow.filter(r => WON.includes(r.status));\nconst lost = closedNow.filter(r => LOST.includes(r.status));\n\nconst openValue = open.reduce((a, r) => a + money(r.quote_amount), 0);\nconst wonValue = won.reduce((a, r) => a + money(r.quote_amount), 0);\nconst old = open.filter(r => r.age !== null && r.age >= Number(s.old_after_days))\n  .sort((a, b) => b.age - a.age);\nconst rate = (won.length + lost.length) ? Math.round(100 * won.length / (won.length + lost.length)) + '%' : 'no quotes closed';\n\nconst line = r => `<tr><td>${esc(r.quote_id || r.request_id)}</td><td>${esc(r.name)}</td><td>${esc(r.status)}</td><td>${r.age ?? ''} days</td><td>${r.quote_amount ? esc(fmt(money(r.quote_amount))) : ''}</td></tr>`;\nconst table = list => list.length\n  ? `<table cellpadding=\"6\" style=\"border-collapse:collapse\"><tr><th align=\"left\">Quote</th><th align=\"left\">Customer</th><th align=\"left\">Status</th><th align=\"left\">Open for</th><th align=\"left\">Amount</th></tr>${list.map(line).join('')}</table>`\n  : '<p>None.</p>';\n\nconst html = `\n<h2>${esc(s.business_name)}: quotes, week of ${now.toFormat('d LLL yyyy')}</h2>\n<ul>\n  <li><b>Open quotes:</b> ${open.length}, worth ${fmt(openValue)}</li>\n  <li><b>Won since last summary:</b> ${won.length}, worth ${fmt(wonValue)}</li>\n  <li><b>Lost since last summary:</b> ${lost.length}</li>\n  <li><b>Close rate since last summary:</b> ${rate}</li>\n  <li><b>Requests still waiting for a quote:</b> ${waiting.length}</li>\n</ul>\n<h3>Open for ${s.old_after_days} days or more</h3>\n${table(old)}\n<h3>All open quotes</h3>\n${table(open.sort((a, b) => (b.age ?? 0) - (a.age ?? 0)))}\n`;\n\nreturn [{ json: {\n  subject: `${s.business_name}: ${open.length} open quotes, ${won.length} won, ${lost.length} lost this week`,\n  html,\n  to_stamp: closedNow.map(r => r.request_id),\n}}];"
+      },
+      "name": "Count the week",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        160
+      ],
+      "id": "93773f83-f27f-49be-a48b-6f63938ac166"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Settings').first().json.owner_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Send weekly summary",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1000,
+        160
+      ],
+      "id": "aec14eac-8de1-43f4-a138-d16c2e782311",
+      "webhookId": "5d77c060-7cc6-43fb-bf7d-69097f5cf851"
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = DateTime.now().setZone($('Settings').first().json.timezone).toISO();\nreturn $('Count the week').first().json.to_stamp.map(id => ({ json: { request_id: id, closed_at: now } }));"
+      },
+      "name": "Quotes closed this week",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        160
+      ],
+      "id": "094f395f-9192-4be4-a92f-72a723ed254d"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Requests"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "request_id": "={{ $json.request_id }}",
+            "closed_at": "={{ $json.closed_at }}"
+          },
+          "matchingColumns": [
+            "request_id"
+          ],
+          "schema": [
+            {
+              "id": "request_id",
+              "displayName": "request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "address",
+              "displayName": "address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "preferred_date",
+              "displayName": "preferred_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "details",
+              "displayName": "details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "missing_fields",
+              "displayName": "missing_fields",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_id",
+              "displayName": "quote_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_amount",
+              "displayName": "quote_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "thread_id",
+              "displayName": "thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_sent_at",
+              "displayName": "quote_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "follow_ups_sent",
+              "displayName": "follow_ups_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_follow_up_at",
+              "displayName": "last_follow_up_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reply_label",
+              "displayName": "reply_label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_start",
+              "displayName": "job_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "closed_at",
+              "displayName": "closed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "name": "Mark as counted",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1480,
+        160
+      ],
+      "id": "b2ee4e5b-67fc-432a-97d3-52dcb9a665fe"
+    },
+    {
+      "parameters": {
+        "content": "## Send a weekly summary of open quotes to follow up with Gmail\n\nFor service businesses that keep their quotes in a Google Sheet and want one email a week instead of opening it every day.\n\n### How it works\n1. Every Monday at 8:00 the workflow groups the sheet rows by `status`.\n2. You get one email: open quotes and their value, quotes won and lost since the last summary, the close rate, and the quotes open too long.\n3. Closed quotes get a date in `closed_at`, so each one is counted once.\n\nThe first run counts every quote already closed in the sheet.\n\n### Setup\n1. Use the sheet described in the **Sheet** note.\n2. Pick your Google Sheets credential and paste your sheet URL in **Document** in **Read all quotes** and **Mark as counted**. Pick your Gmail credential in **Send weekly summary**.\n3. Edit **Settings**: change `owner_email` to your email first, then currency symbol and time zone. Set Workflow settings > Timezone to the same zone.\n4. To see it now, click Execute workflow. A test run also marks closed quotes as counted, so they will not show in Monday's email.\n5. Activate.\n\nIf nothing happens, open **Executions** to see the error.\n\n### Requirements\n- Google Sheets and Gmail credentials in n8n: docs.n8n.io/integrations/builtin/credentials/google/. If your Google Cloud app is External and in Testing, the connection expires after 7 days; publish it to avoid this.\n- Statuses, in lowercase. Waiting: `missing_info`, `ready_to_quote`. Open: `quote_sent`, `review`, `replied`. Won: `accepted`, `booking_sent`, `scheduled`. Lost: `lost`, `no_reply`.\n- By hand: set `quote_sent`, and fill `quote_amount` (numbers only, dot for cents: 1200.50) and `quote_sent_at` (like 2026-10-14; if Sheets changes it, format the column as Plain text).\n- `old_after_days` in **Settings**: when an open quote counts as old.\n\nOne person is behind Small Hours. AI agents built and tested this template.",
+        "height": 1080,
+        "width": 520
+      },
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -340,
+        -260
+      ],
+      "id": "dfe75471-a982-42f3-8026-250c9a09bb29"
+    },
+    {
+      "parameters": {
+        "content": "### Sheet: tab named `Requests`\nSame sheet as the quote request template. To create it, paste this line in cell A1, then Data > Split text to columns:\n`request_id,received_at,status,name,email,phone,service,address,preferred_date,details,missing_fields,quote_id,quote_amount,thread_id,quote_sent_at,follow_ups_sent,last_follow_up_at,reply_label,job_start,event_id,closed_at`",
+        "height": 260,
+        "width": 560,
+        "color": 5
+      },
+      "name": "Sheet",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        700,
+        -260
+      ],
+      "id": "76eb327c-0438-409b-b312-0fdc51b5b498"
+    },
+    {
+      "parameters": {
+        "content": "## 1. Set your details\nYour email first, then currency, time zone and when a quote counts as old.",
+        "height": 240,
+        "width": 420,
+        "color": 5
+      },
+      "name": "Section: Set your details",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -260
+      ],
+      "id": "dcf32002-75e5-469b-821f-29691460cf69"
+    },
+    {
+      "parameters": {
+        "content": "## 2. Every Monday it counts your quotes\nReads every row and builds the email. Open quotes are counted by age, closed ones only if `closed_at` is empty.",
+        "height": 240,
+        "width": 660,
+        "color": 7
+      },
+      "name": "Section: Every Monday it counts your quotes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        60
+      ],
+      "id": "43fd367c-b423-4df6-bd48-a5c7e053f11b"
+    },
+    {
+      "parameters": {
+        "content": "## 3. You get one email, then they are marked as counted\nThe summary goes to `owner_email`, then each closed quote it counted gets a date in `closed_at`.",
+        "height": 240,
+        "width": 660,
+        "color": 7
+      },
+      "name": "Section: You get one email, then they are marked as counted",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        960,
+        60
+      ],
+      "id": "59bb4394-c4c2-4437-a7d3-0753ff0d44a7"
+    }
+  ],
+  "connections": {
+    "Every Monday": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Read all quotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read all quotes": {
+      "main": [
+        [
+          {
+            "node": "Count the week",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count the week": {
+      "main": [
+        [
+          {
+            "node": "Send weekly summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send weekly summary": {
+      "main": [
+        [
+          {
+            "node": "Quotes closed this week",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quotes closed this week": {
+      "main": [
+        [
+          {
+            "node": "Mark as counted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
