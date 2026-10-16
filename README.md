@@ -1,14 +1,16 @@
 # Small Hours: n8n templates for service businesses that quote by email
 
-There is one person behind Small Hours. The work is done by a team of AI agents, who built the three free n8n workflows in this repository for small service businesses (movers, cleaners, contractors, installers) that quote jobs by email and keep track in Google Sheets. Each one was tested with real Gmail, Google Sheets and Google Calendar accounts before it was published here.
+There is one person behind Small Hours. The work is done by a team of AI agents, who built the five free n8n workflows in this repository for small service businesses (movers, cleaners, contractors, installers) that quote jobs by email and keep track in Google Sheets. Each one was tested with real Gmail, Google Sheets and Google Calendar accounts before it was published here.
 
-The three use the same Google Sheet (a tab named `Requests`), so each works on its own and they also work together.
+The five use the same Google Sheet (a tab named `Requests`), so each works on its own. The last two both read `closed_at`, so read their notes before you run them together.
 
 | Folder | What it does | You need |
 |---|---|---|
 | `quote-requests/` | A quote request form that saves each request in Google Sheets and emails the customer: a confirmation, or a short list of what is missing | Google Sheets, Gmail |
 | `booking/` | When you mark a quote `accepted`, the customer gets a personal link, picks a free time in your Google Calendar and gets a reminder the day before | Google Sheets, Google Calendar, Gmail |
 | `weekly-summary/` | One email every Monday: open quotes and their value, quotes won and lost, the close rate, and the quotes open too long | Google Sheets, Gmail |
+| `review-request/` | Once a job has a date in `closed_at`, the customer gets one email asking for a review, and never a second | Google Sheets, Gmail |
+| `payment-reminder/` | Jobs with a date in `closed_at` that are not marked paid get a polite email, at most twice | Google Sheets, Gmail |
 
 ## How to use one
 
@@ -46,6 +48,28 @@ Needs the form path `book-job` free in your n8n.
 
 The first run counts every quote already closed in the sheet. A test run also marks them as counted.
 
+## review-request
+
+1. Every day at 10:00 the workflow looks for rows with a date in `closed_at` and no review asked yet. You type that date by hand when a job is done.
+2. The customer gets one email with your review link, in the thread of their quote when `thread_id` is filled, as a new email if not.
+3. The row gets `review_asked` and the date in `reply_label`, and it is never asked again. The row is marked before the email is sent, so a customer is not asked twice.
+
+Rows with status `lost` or `no_reply` are skipped, and so are rows whose `job_start` is still in the future. If Gmail refuses the email, the row says `review_failed` and you get an email; it is not retried.
+
+Nothing is sent until you replace the default `business_name`, `owner_email` and `review_link` in **Settings**. Limitations: do not run it next to `weekly-summary/`, which also fills `closed_at`; and it asks for a review whether or not the customer has paid, so think before you run it with `payment-reminder/`.
+
+## payment-reminder
+
+1. Every day at 10:00 the workflow looks for rows with a date in `closed_at` (the day you finished or invoiced the job) that are not marked paid.
+2. The first reminder goes out 3 days after that date and the second 7 days after the first. Then it stops. The days and the maximum are in **Settings**.
+3. Each email goes in the quote thread when `thread_id` is filled, as a new email if not. The row gets `pay_reminder_1` (or 2) and the date in `reply_label`.
+
+When the customer pays, type `paid` in `reply_label`. Rows with status `lost` or `no_reply` are skipped. If Gmail refuses the email, the row says `pay_failed` and you get an email; it is not retried.
+
+Tested with seven rows: a job due for its first reminder, one not due yet, one due for its second, one that already had two, one marked `paid`, one with a thread that does not exist (sent as a new email) and one marked `lost`. A second run sent nothing again.
+
+Nothing is sent until you replace the default `business_name`, `owner_email` and `payment_info` in **Settings**. Limitations: it does not know who paid, so mark `paid` before 10:00; and a `closed_at` that is not a date like 2026-10-14 is skipped without a message.
+
 ## Google connection
 
 If your Google Cloud app is External and in Testing, the connection expires after 7 days; publish it to avoid this (Google then shows an "unverified app" warning you can click through). Google's setup guide for n8n: docs.n8n.io/integrations/builtin/credentials/google/
@@ -81,4 +105,4 @@ Two short articles on the Small Hours blog, for people who build these flows for
 
 ## License
 
-The three free workflows in this repository are released under the MIT License (see `LICENSE`). The paid template has its own license, included with the purchase.
+The five free workflows in this repository are released under the MIT License (see `LICENSE`). The paid template has its own license, included with the purchase.
