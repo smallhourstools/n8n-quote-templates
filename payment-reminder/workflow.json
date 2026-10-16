@@ -1,0 +1,928 @@
+{
+  "name": "Send payment reminders for finished jobs from Google Sheets with Gmail",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 10
+            }
+          ]
+        }
+      },
+      "name": "Every day at 10:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        160
+      ],
+      "id": "91676031-34dc-4c89-87ce-683a12a86700"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "adafe8c5-b527-412c-a1d4-959ad0cca5d1",
+              "name": "business_name",
+              "value": "Your Business Name",
+              "type": "string"
+            },
+            {
+              "id": "a57e0933-5b79-4515-9d8c-61b2d6176b6e",
+              "name": "owner_email",
+              "value": "you@example.com",
+              "type": "string"
+            },
+            {
+              "id": "cbd03db1-bb82-4cc9-9950-cb3cba5db720",
+              "name": "payment_info",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "2967f283-363f-4b67-b3b6-ba65f5136f5d",
+              "name": "first_after_days",
+              "value": 3,
+              "type": "number"
+            },
+            {
+              "id": "87af90ae-b4fe-4e5d-9700-d3cd45752ca1",
+              "name": "repeat_after_days",
+              "value": 7,
+              "type": "number"
+            },
+            {
+              "id": "8b7ad8eb-fb42-442c-9573-b6056fe53e3a",
+              "name": "max_reminders",
+              "value": 2,
+              "type": "number"
+            },
+            {
+              "id": "f8af45ac-712b-4e78-bd45-c497aa5b6274",
+              "name": "max_per_run",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "257c084e-8fe7-4dea-b712-28494c3e4b49",
+              "name": "timezone",
+              "value": "America/New_York",
+              "type": "string"
+            },
+            {
+              "id": "5b1cee09-bd1b-4e14-a2a9-3df63861812e",
+              "name": "reminder_message",
+              "value": "Hi {name},\n\nA friendly note that we have not yet received payment{amount_text}. {payment_info}\n\nIf you already paid, thank you, and please ignore this email.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        280,
+        -160
+      ],
+      "id": "bf79015e-5d70-4d5d-bd4c-b665b25648df"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Requests"
+        },
+        "options": {}
+      },
+      "name": "Read the sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        520,
+        160
+      ],
+      "id": "701fb996-84da-4eba-a94b-157e1f5f13f9",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rows with a date in closed_at, not marked paid, whose next payment reminder is due.\n// Reminders are written in reply_label as \"pay_reminder_1 2026-10-14\", so the count and the last date live in the row.\nconst s = $('Settings').first().json;\nconst tz = s.timezone;\nconst now = DateTime.now().setZone(tz);\nconst parse = v => {\n  const t = String(v ?? '').trim();\n  if (!t) return null;\n  let d = DateTime.fromISO(t, { zone: tz });\n  if (!d.isValid) { const j = new Date(t); if (!isNaN(j)) d = DateTime.fromJSDate(j, { zone: tz }); }\n  return d.isValid ? d : null;\n};\n// Factory values never send anything to a customer.\nconst ready = String(s.business_name).trim() && String(s.business_name).trim() !== 'Your Business Name'\n  && String(s.payment_info).trim() && /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(String(s.owner_email).trim())\n  && !/@example\\.com$/i.test(String(s.owner_email).trim());\nif (!ready) return [];\n\nconst seen = new Set();\nconst out = [];\nfor (const i of $input.all()) {\n  const r = i.json;\n  if (!r.request_id) continue;\n  const label = String(r.reply_label || '');\n  if (/\\bpaid\\b/i.test(label) || /pay_failed/.test(label)) continue;\n  if (['lost', 'no_reply'].includes(String(r.status || '').trim())) continue;\n  const closed = parse(r.closed_at);\n  if (!closed) continue;\n  const done = [...label.matchAll(/pay_reminder_(\\d+) (\\d{4}-\\d{2}-\\d{2})/g)];\n  const count = done.length;\n  if (count >= Number(s.max_reminders)) continue;\n  const last = count ? parse(done[count - 1][2]) : null;\n  const due = last ? last.plus({ days: Number(s.repeat_after_days) }) : closed.plus({ days: Number(s.first_after_days) });\n  if (now < due.startOf('day')) continue;\n  const email = String(r.email || '').trim().toLowerCase();\n  if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email) || seen.has(email)) continue;\n  seen.add(email);\n  out.push({ json: { request_id: r.request_id, name: r.name || '', email: String(r.email).trim(),\n    thread_id: String(r.thread_id || '').trim(), reply_label: label.trim(), quote_amount: String(r.quote_amount || '').trim(), count } });\n  if (out.length >= Number(s.max_per_run)) break;\n}\nreturn out;"
+      },
+      "name": "Pick unpaid jobs to remind",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        160
+      ],
+      "id": "8faee1f8-acae-4752-ace6-3cfeb7826b3c"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c5f6daa1-5d9b-4a64-9478-29e520bf84cd",
+              "leftValue": "={{ $json.thread_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has a quote thread?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1000,
+        160
+      ],
+      "id": "9f86b479-c3df-4341-984c-e9f3fe99fd56"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/threads/{{ $json.thread_id }}?format=metadata&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=Message-Id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {}
+      },
+      "name": "Read the quote thread",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1240,
+        160
+      ],
+      "id": "04ac7025-4f1e-42e6-a4f6-70d1e76cd22c",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Writes the email: a reply in the quote's Gmail thread when it exists, a new email otherwise.\nconst s = $('Settings').first().json;\nconst row = $('Pick unpaid jobs to remind').item.json;\nconst msgs = Array.isArray($json.messages) ? $json.messages : [];\nconst header = (m, n) => {\n  const h = ((m.payload && m.payload.headers) || []).find(x => String(x.name).toLowerCase() === n.toLowerCase());\n  return h ? h.value : '';\n};\nconst inThread = msgs.length > 0;\nconst subject0 = inThread ? header(msgs[0], 'Subject') : '';\nconst subject = inThread && subject0\n  ? (/^re:/i.test(subject0) ? subject0 : 'Re: ' + subject0)\n  : 'Payment reminder from ' + s.business_name;\nconst ids = msgs.map(m => header(m, 'Message-ID')).filter(Boolean);\nconst amountText = row.quote_amount ? ' for ' + row.quote_amount : '';\nconst text = String(s.reminder_message).replace(/\\{name\\}/g, row.name || 'there')\n  .replace(/\\{amount_text\\}/g, amountText).replace(/\\{payment_info\\}/g, s.payment_info)\n  + '\\n\\n' + s.business_name;\nconst b64 = v => Buffer.from(v, 'utf8').toString('base64');\nconst lines = [\n  'To: ' + row.email,\n  'Subject: =?UTF-8?B?' + b64(subject) + '?=',\n  'MIME-Version: 1.0',\n  'Content-Type: text/plain; charset=UTF-8',\n  'Content-Transfer-Encoding: base64',\n];\nif (ids.length) lines.push('In-Reply-To: ' + ids[ids.length - 1], 'References: ' + ids.join(' '));\nconst raw = Buffer.from(lines.join('\\r\\n') + '\\r\\n\\r\\n' + b64(text), 'utf8').toString('base64url');\nconst day = DateTime.now().setZone(s.timezone).toFormat('yyyy-MM-dd');\nconst join = tag => [row.reply_label, tag].filter(Boolean).join('; ');\nreturn { json: { request_id: row.request_id, email: row.email, raw,\n  thread_id: inThread ? row.thread_id : '', in_thread: inThread,\n  label_sent: join('pay_reminder_' + (row.count + 1) + ' ' + day), label_failed: join('pay_failed ' + day) } };",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Write the payment reminder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        160
+      ],
+      "id": "4d9cadff-bce2-4bed-a895-7a94aacf2972"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Requests"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "request_id": "={{ $('Write the payment reminder').item.json.request_id }}",
+            "reply_label": "={{ $('Write the payment reminder').item.json.label_sent }}"
+          },
+          "matchingColumns": [
+            "request_id"
+          ],
+          "schema": [
+            {
+              "id": "request_id",
+              "displayName": "request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "address",
+              "displayName": "address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "preferred_date",
+              "displayName": "preferred_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "details",
+              "displayName": "details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "missing_fields",
+              "displayName": "missing_fields",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_id",
+              "displayName": "quote_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_amount",
+              "displayName": "quote_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "thread_id",
+              "displayName": "thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_sent_at",
+              "displayName": "quote_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "follow_ups_sent",
+              "displayName": "follow_ups_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_follow_up_at",
+              "displayName": "last_follow_up_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reply_label",
+              "displayName": "reply_label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_start",
+              "displayName": "job_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "closed_at",
+              "displayName": "closed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "name": "Mark as reminded",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        280,
+        460
+      ],
+      "id": "e7f7fc32-befd-4fb8-95ac-c0950baec6a4"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Write the payment reminder').item.json.thread_id ? { raw: $('Write the payment reminder').item.json.raw, threadId: $('Write the payment reminder').item.json.thread_id } : { raw: $('Write the payment reminder').item.json.raw }) }}"
+      },
+      "name": "Send the payment reminder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        460
+      ],
+      "id": "316d2e77-f8ad-42bc-894c-4a8283425a02",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Requests"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "request_id": "={{ $('Write the payment reminder').item.json.request_id }}",
+            "reply_label": "={{ $('Write the payment reminder').item.json.label_failed }}"
+          },
+          "matchingColumns": [
+            "request_id"
+          ],
+          "schema": [
+            {
+              "id": "request_id",
+              "displayName": "request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "address",
+              "displayName": "address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "preferred_date",
+              "displayName": "preferred_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "details",
+              "displayName": "details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "missing_fields",
+              "displayName": "missing_fields",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_id",
+              "displayName": "quote_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_amount",
+              "displayName": "quote_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "thread_id",
+              "displayName": "thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_sent_at",
+              "displayName": "quote_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "follow_ups_sent",
+              "displayName": "follow_ups_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_follow_up_at",
+              "displayName": "last_follow_up_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reply_label",
+              "displayName": "reply_label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_start",
+              "displayName": "job_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "closed_at",
+              "displayName": "closed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "name": "Mark send failed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1000,
+        460
+      ],
+      "id": "a7848aac-a35e-41f4-8d6c-63a5ec017549"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Settings').first().json.owner_email }}",
+        "subject": "A payment reminder could not be sent",
+        "emailType": "text",
+        "message": "=The payment reminder to {{ $('Write the payment reminder').item.json.email }} could not be sent. Gmail said no, so it was not retried and the row (request {{ $('Write the payment reminder').item.json.request_id }}) says pay_failed in reply_label. Remind them yourself if they still owe you.",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Tell the owner it failed",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1240,
+        460
+      ],
+      "id": "8c034539-715e-4ab2-8fb1-a3e8aeff3f3e",
+      "webhookId": "a5d551bf-29af-4afa-939a-9cbd9b2563e5"
+    },
+    {
+      "parameters": {
+        "content": "## Send payment reminders for finished jobs from Google Sheets with Gmail\n\nFor service businesses that keep jobs in a Google Sheet and want a polite email, at most twice, to customers who have not paid.\n\n### How it works\n1. Every day at 10:00 it looks for rows with a date in `closed_at` (the day you finished or invoiced the job) that are not marked paid.\n2. The first reminder goes out 3 days after that date, the second 7 days after the first. Then it stops. Days and maximum are in **Settings**.\n3. Each email goes in the quote thread when `thread_id` is filled, as a new email if not. The row gets `pay_reminder_1` (or 2) and the date in `reply_label`.\n\nWhen the customer pays, type `paid` in `reply_label`. Rows with status `lost` or `no_reply` are skipped.\n\n### Setup\n1. Use the sheet described in the **Sheet** note.\n2. Pick your Google Sheets credential and paste your sheet URL in **Document** in **Read the sheet**, **Mark as reminded** and **Mark send failed**. Pick your Gmail credential in the two HTTP nodes and in **Tell the owner it failed**.\n3. Edit **Settings**: `business_name`, `owner_email` and `payment_info` (how to pay) first. Nothing is sent while they have the default values.\n4. Set Workflow settings > Timezone to the zone in `timezone`. Activate.\n5. By hand, when a job is done or invoiced, put a date like 2026-10-14 in `closed_at`.\n\nIf nothing happens, check **Executions**.\n\n### Requirements\n- Google Sheets and Gmail credentials in n8n: docs.n8n.io/integrations/builtin/credentials/google/. A Google Cloud app in Testing expires the connection after 7 days; publish it.\n- It does not know who paid. Mark `paid` before 10:00.\n\nOur paid template follows up Gmail quotes until the customer replies: https://payhip.com/b/OyN5V\n\nOne person is behind Small Hours. AI agents built and tested this template.",
+        "height": 1180,
+        "width": 520
+      },
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -340,
+        -260
+      ],
+      "id": "ad54407d-696c-4983-bdad-04b11d4dc6f1"
+    },
+    {
+      "parameters": {
+        "content": "### Sheet: tab named `Requests`\nSame sheet as the quote follow-up template. To create it, paste this line in cell A1, then Data > Split text to columns:\n`request_id,received_at,status,name,email,phone,service,address,preferred_date,details,missing_fields,quote_id,quote_amount,thread_id,quote_sent_at,follow_ups_sent,last_follow_up_at,reply_label,job_start,event_id,closed_at`",
+        "height": 260,
+        "width": 560,
+        "color": 5
+      },
+      "name": "Sheet",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        700,
+        -260
+      ],
+      "id": "99f1b869-eb36-4c52-ba30-33e63950e950"
+    },
+    {
+      "parameters": {
+        "content": "## 1. Set your details\nYour email, how customers pay and your time zone first. Nothing is sent until you do.",
+        "height": 240,
+        "width": 420,
+        "color": 5
+      },
+      "name": "Section: Set your details",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -260
+      ],
+      "id": "2dc8df55-f6cd-4051-b116-94e7e6b95e07"
+    },
+    {
+      "parameters": {
+        "content": "## 2. Every morning it finds unpaid jobs\nRows with a date in `closed_at`, not marked paid, whose reminder is due.",
+        "height": 240,
+        "width": 660,
+        "color": 7
+      },
+      "name": "Section: Every morning it finds unpaid jobs",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        60
+      ],
+      "id": "80038829-dc5d-4297-8952-2228983bb7f6"
+    },
+    {
+      "parameters": {
+        "content": "## 3. It writes one email in the quote thread\nA reply in their quote thread, or a new email when there is no thread.",
+        "height": 240,
+        "width": 660,
+        "color": 7
+      },
+      "name": "Section: It writes one email in the quote thread",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        960,
+        60
+      ],
+      "id": "95fa3970-a366-4842-9030-6da3161bc6eb"
+    },
+    {
+      "parameters": {
+        "content": "## 4. It marks the row, then sends\nThe row is marked first, so a reminder is never sent twice.",
+        "height": 240,
+        "width": 420,
+        "color": 7
+      },
+      "name": "Section: It marks the row, then sends",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        360
+      ],
+      "id": "6647033c-da45-42bd-a2e1-d24ec75f4f84"
+    },
+    {
+      "parameters": {
+        "content": "## 5. If Gmail refuses, you are told\nThe row says `pay_failed` and it is not retried.",
+        "height": 240,
+        "width": 420,
+        "color": 3
+      },
+      "name": "Section: If Gmail refuses, you are told",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        960,
+        360
+      ],
+      "id": "3af5a486-9d6d-479e-aa34-c38bd0eec385"
+    }
+  ],
+  "connections": {
+    "Every day at 10:00": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Read the sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the sheet": {
+      "main": [
+        [
+          {
+            "node": "Pick unpaid jobs to remind",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick unpaid jobs to remind": {
+      "main": [
+        [
+          {
+            "node": "Has a quote thread?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has a quote thread?": {
+      "main": [
+        [
+          {
+            "node": "Read the quote thread",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write the payment reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the quote thread": {
+      "main": [
+        [
+          {
+            "node": "Write the payment reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write the payment reminder": {
+      "main": [
+        [
+          {
+            "node": "Mark as reminded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as reminded": {
+      "main": [
+        [
+          {
+            "node": "Send the payment reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send the payment reminder": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Mark send failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark send failed": {
+      "main": [
+        [
+          {
+            "node": "Tell the owner it failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
