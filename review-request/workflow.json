@@ -1,0 +1,916 @@
+{
+  "name": "Ask customers for a review once from Google Sheets with Gmail",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 10
+            }
+          ]
+        }
+      },
+      "name": "Every day at 10:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        160
+      ],
+      "id": "9306af7c-a801-4d12-80ed-744610340fc1"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "18a97e1a-977b-43c4-8447-854c8a5d17d7",
+              "name": "business_name",
+              "value": "Your Business Name",
+              "type": "string"
+            },
+            {
+              "id": "06865e63-8894-4b95-b32e-ab6c70a976c0",
+              "name": "owner_email",
+              "value": "you@example.com",
+              "type": "string"
+            },
+            {
+              "id": "e1da219c-3394-4882-a2a9-da5474fa32a0",
+              "name": "review_link",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "6a3e32af-6c9a-42f9-8fb8-896027331516",
+              "name": "ask_after_days",
+              "value": 1,
+              "type": "number"
+            },
+            {
+              "id": "06c0a1e8-cc4f-46e6-a36a-e7df883e25b8",
+              "name": "max_per_run",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "126c7420-4c5d-435e-b876-ed48239e979b",
+              "name": "timezone",
+              "value": "America/New_York",
+              "type": "string"
+            },
+            {
+              "id": "4422bfff-d6b8-4f0b-b3f7-54bd44ace5a4",
+              "name": "review_message",
+              "value": "Hi {name},\n\nThank you for choosing us. If you have a minute, a short review helps other customers find us: {link}\n\nThis is the only time we will ask.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        280,
+        -160
+      ],
+      "id": "01eb08c1-122b-47d4-a20f-f139b1c6013c"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Requests"
+        },
+        "options": {}
+      },
+      "name": "Read the sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        520,
+        160
+      ],
+      "id": "93f6d456-c434-43cf-b799-d60ed9ab6d92",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rows whose job is closed (closed_at filled) and that were never asked for a review.\n// Lost and no-reply quotes are never asked. The ask is written in reply_label, so a row is asked once, ever.\nconst s = $('Settings').first().json;\nconst tz = s.timezone;\nconst now = DateTime.now().setZone(tz);\nconst parse = v => {\n  const t = String(v ?? '').trim();\n  if (!t) return null;\n  let d = DateTime.fromISO(t, { zone: tz });\n  if (!d.isValid) { const j = new Date(t); if (!isNaN(j)) d = DateTime.fromJSDate(j, { zone: tz }); }\n  return d.isValid ? d : null;\n};\n// Factory values never send anything to a customer.\nconst ready = String(s.business_name).trim() && String(s.business_name).trim() !== 'Your Business Name'\n  && String(s.review_link).trim() && /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(String(s.owner_email).trim())\n  && !/@example\\.com$/i.test(String(s.owner_email).trim());\nif (!ready) return [];\n\nconst seen = new Set();\nconst out = [];\nfor (const i of $input.all()) {\n  const r = i.json;\n  if (!r.request_id) continue;\n  if (/review_(asked|failed)/.test(String(r.reply_label || ''))) continue;\n  if (['lost', 'no_reply'].includes(String(r.status || '').trim())) continue;\n  const closed = parse(r.closed_at);\n  if (!closed || now.diff(closed, 'days').days < Number(s.ask_after_days)) continue;\n  const start = parse(r.job_start);\n  if (start && start > now) continue;\n  const email = String(r.email || '').trim().toLowerCase();\n  if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email) || seen.has(email)) continue;\n  seen.add(email);\n  out.push({ json: { request_id: r.request_id, name: r.name || '', email: String(r.email).trim(),\n    thread_id: String(r.thread_id || '').trim(), reply_label: String(r.reply_label || '').trim() } });\n  if (out.length >= Number(s.max_per_run)) break;\n}\nreturn out;"
+      },
+      "name": "Pick closed jobs to ask",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        160
+      ],
+      "id": "e9ab8a72-72cd-4efe-ad62-772bb3acaca2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "15caccc8-5db2-4cb5-88cc-65318396fb9a",
+              "leftValue": "={{ $json.thread_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has a quote thread?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1000,
+        160
+      ],
+      "id": "9da85b9a-ede6-4428-8987-28e4758e791c"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/threads/{{ $json.thread_id }}?format=metadata&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=Message-Id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {}
+      },
+      "name": "Read the quote thread",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1240,
+        160
+      ],
+      "id": "795b68f3-e7ed-48f7-aacd-fbe7c502e477",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Writes the email: a reply in the quote's Gmail thread when it exists, a new email otherwise.\nconst s = $('Settings').first().json;\nconst row = $('Pick closed jobs to ask').item.json;\nconst msgs = Array.isArray($json.messages) ? $json.messages : [];\nconst header = (m, n) => {\n  const h = ((m.payload && m.payload.headers) || []).find(x => String(x.name).toLowerCase() === n.toLowerCase());\n  return h ? h.value : '';\n};\nconst inThread = msgs.length > 0;\nconst subject0 = inThread ? header(msgs[0], 'Subject') : '';\nconst subject = inThread && subject0\n  ? (/^re:/i.test(subject0) ? subject0 : 'Re: ' + subject0)\n  : 'How was your experience with ' + s.business_name + '?';\nconst ids = msgs.map(m => header(m, 'Message-ID')).filter(Boolean);\nconst text = String(s.review_message).replace(/\\{name\\}/g, row.name || 'there').replace(/\\{link\\}/g, s.review_link)\n  + '\\n\\n' + s.business_name;\nconst b64 = v => Buffer.from(v, 'utf8').toString('base64');\nconst lines = [\n  'To: ' + row.email,\n  'Subject: =?UTF-8?B?' + b64(subject) + '?=',\n  'MIME-Version: 1.0',\n  'Content-Type: text/plain; charset=UTF-8',\n  'Content-Transfer-Encoding: base64',\n];\nif (ids.length) lines.push('In-Reply-To: ' + ids[ids.length - 1], 'References: ' + ids.join(' '));\nconst raw = Buffer.from(lines.join('\\r\\n') + '\\r\\n\\r\\n' + b64(text), 'utf8').toString('base64url');\nconst day = DateTime.now().setZone(s.timezone).toFormat('yyyy-MM-dd');\nconst join = tag => [row.reply_label, tag].filter(Boolean).join('; ');\nreturn { json: { request_id: row.request_id, email: row.email, raw,\n  thread_id: inThread ? row.thread_id : '', in_thread: inThread,\n  label_asked: join('review_asked ' + day), label_failed: join('review_failed ' + day) } };",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "Write the review request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        160
+      ],
+      "id": "f6769dc2-70e0-4b5d-91c7-59c3555f33ac"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Requests"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "request_id": "={{ $('Write the review request').item.json.request_id }}",
+            "reply_label": "={{ $('Write the review request').item.json.label_asked }}"
+          },
+          "matchingColumns": [
+            "request_id"
+          ],
+          "schema": [
+            {
+              "id": "request_id",
+              "displayName": "request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "address",
+              "displayName": "address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "preferred_date",
+              "displayName": "preferred_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "details",
+              "displayName": "details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "missing_fields",
+              "displayName": "missing_fields",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_id",
+              "displayName": "quote_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_amount",
+              "displayName": "quote_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "thread_id",
+              "displayName": "thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_sent_at",
+              "displayName": "quote_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "follow_ups_sent",
+              "displayName": "follow_ups_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_follow_up_at",
+              "displayName": "last_follow_up_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reply_label",
+              "displayName": "reply_label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_start",
+              "displayName": "job_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "closed_at",
+              "displayName": "closed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "name": "Mark as asked",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        280,
+        460
+      ],
+      "id": "80c7d695-3aa3-41fa-925a-c2305d5a2164"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Write the review request').item.json.thread_id ? { raw: $('Write the review request').item.json.raw, threadId: $('Write the review request').item.json.thread_id } : { raw: $('Write the review request').item.json.raw }) }}"
+      },
+      "name": "Send the review request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        460
+      ],
+      "id": "20ad5921-339f-4df4-b6f6-765f16dbce11",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Requests"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "request_id": "={{ $('Write the review request').item.json.request_id }}",
+            "reply_label": "={{ $('Write the review request').item.json.label_failed }}"
+          },
+          "matchingColumns": [
+            "request_id"
+          ],
+          "schema": [
+            {
+              "id": "request_id",
+              "displayName": "request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "address",
+              "displayName": "address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "preferred_date",
+              "displayName": "preferred_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "details",
+              "displayName": "details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "missing_fields",
+              "displayName": "missing_fields",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_id",
+              "displayName": "quote_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_amount",
+              "displayName": "quote_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "thread_id",
+              "displayName": "thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "quote_sent_at",
+              "displayName": "quote_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "follow_ups_sent",
+              "displayName": "follow_ups_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_follow_up_at",
+              "displayName": "last_follow_up_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reply_label",
+              "displayName": "reply_label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_start",
+              "displayName": "job_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "closed_at",
+              "displayName": "closed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "name": "Mark send failed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1000,
+        460
+      ],
+      "id": "5df4b62c-75ec-4046-84be-aab92a55965e"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Settings').first().json.owner_email }}",
+        "subject": "A review request could not be sent",
+        "emailType": "text",
+        "message": "=The review request to {{ $('Write the review request').item.json.email }} could not be sent. Gmail said no, so it was not retried and the row (request {{ $('Write the review request').item.json.request_id }}) says review_failed in reply_label. Ask them yourself if you still want the review.",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Tell the owner it failed",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1240,
+        460
+      ],
+      "id": "2b378afe-062c-493c-8cbb-ebbace95ea2e",
+      "webhookId": "4708ed2e-3756-4ab9-92dd-5fe6083fb658"
+    },
+    {
+      "parameters": {
+        "content": "## Ask for a review once when a job is closed in Google Sheets with Gmail\n\nFor service businesses that keep quotes in a Google Sheet and want one review request per finished job, never a reminder.\n\n### How it works\n1. Every day at 10:00 the workflow looks for rows with a date in `closed_at` and no review asked yet.\n2. It sends one email to the customer, in the thread of their quote when `thread_id` is filled, as a new email if not.\n3. It writes `review_asked` and the date in `reply_label`. That row is never asked again.\n\nRows with status `lost` or `no_reply` are skipped, and so are rows whose `job_start` is still in the future.\n\n### Setup\n1. Use the sheet described in the **Sheet** note.\n2. Pick your Google Sheets credential and paste your sheet URL in **Document** in **Read the sheet**, **Mark as asked** and **Mark send failed**. Pick your Gmail credential in the two HTTP nodes and in **Tell the owner it failed**.\n3. Edit **Settings**: `business_name`, `owner_email` and `review_link` first. Nothing is sent while they have the default values.\n4. Set Workflow settings > Timezone to the zone in `timezone`. Activate.\n5. By hand, when a job is done, put a date like 2026-10-14 in `closed_at`.\n\nIf nothing happens, check **Executions**.\n\n### Requirements\n- Google Sheets and Gmail credentials in n8n: docs.n8n.io/integrations/builtin/credentials/google/. If your Google Cloud app is External and in Testing, the connection expires after 7 days; publish it to avoid this.\n- Do not run it next to the weekly summary template: that one also fills `closed_at`.\n\nOur paid template follows up Gmail quotes until the customer replies: https://payhip.com/b/OyN5V\n\nOne person is behind Small Hours. AI agents built and tested this template.",
+        "height": 1080,
+        "width": 520
+      },
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -340,
+        -260
+      ],
+      "id": "cafee99b-b3ee-44e8-8643-cfab4b06c351"
+    },
+    {
+      "parameters": {
+        "content": "### Sheet: tab named `Requests`\nSame sheet as the quote follow-up template. To create it, paste this line in cell A1, then Data > Split text to columns:\n`request_id,received_at,status,name,email,phone,service,address,preferred_date,details,missing_fields,quote_id,quote_amount,thread_id,quote_sent_at,follow_ups_sent,last_follow_up_at,reply_label,job_start,event_id,closed_at`",
+        "height": 260,
+        "width": 560,
+        "color": 5
+      },
+      "name": "Sheet",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        700,
+        -260
+      ],
+      "id": "d184cb0e-cb64-4b8d-a88c-08813b082781"
+    },
+    {
+      "parameters": {
+        "content": "## 1. Set your details\nYour email, your review link and your time zone first. Nothing is sent until you do.",
+        "height": 240,
+        "width": 420,
+        "color": 5
+      },
+      "name": "Section: Set your details",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -260
+      ],
+      "id": "98f87c30-1447-42fe-b8c7-45f87838c335"
+    },
+    {
+      "parameters": {
+        "content": "## 2. Every morning it finds closed jobs\nRows with a date in `closed_at` that were never asked, up to `max_per_run`.",
+        "height": 240,
+        "width": 660,
+        "color": 7
+      },
+      "name": "Section: Every morning it finds closed jobs",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        60
+      ],
+      "id": "d0447a9f-0299-4270-97c3-a0fd0e48e7a3"
+    },
+    {
+      "parameters": {
+        "content": "## 3. It writes one email in the quote thread\nA reply in their quote thread, or a new email when there is no thread.",
+        "height": 240,
+        "width": 660,
+        "color": 7
+      },
+      "name": "Section: It writes one email in the quote thread",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        960,
+        60
+      ],
+      "id": "e91afcad-a108-41f2-997b-d30429779e4c"
+    },
+    {
+      "parameters": {
+        "content": "## 4. It marks the row, then asks once\nThe row is marked first, so a customer is never asked twice.",
+        "height": 240,
+        "width": 420,
+        "color": 7
+      },
+      "name": "Section: It marks the row, then asks once",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        360
+      ],
+      "id": "b77e1ec6-2572-40fb-8a2e-86f7bd79a145"
+    },
+    {
+      "parameters": {
+        "content": "## 5. If Gmail refuses, you are told\nThe row says `review_failed` and it is not retried.",
+        "height": 240,
+        "width": 420,
+        "color": 3
+      },
+      "name": "Section: If Gmail refuses, you are told",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        960,
+        360
+      ],
+      "id": "e3c2a50f-890d-4e27-82a0-887b28b1c3de"
+    }
+  ],
+  "connections": {
+    "Every day at 10:00": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Read the sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the sheet": {
+      "main": [
+        [
+          {
+            "node": "Pick closed jobs to ask",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick closed jobs to ask": {
+      "main": [
+        [
+          {
+            "node": "Has a quote thread?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has a quote thread?": {
+      "main": [
+        [
+          {
+            "node": "Read the quote thread",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write the review request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the quote thread": {
+      "main": [
+        [
+          {
+            "node": "Write the review request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write the review request": {
+      "main": [
+        [
+          {
+            "node": "Mark as asked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as asked": {
+      "main": [
+        [
+          {
+            "node": "Send the review request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send the review request": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Mark send failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark send failed": {
+      "main": [
+        [
+          {
+            "node": "Tell the owner it failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
