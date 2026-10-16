@@ -76,9 +76,11 @@ If your Google Cloud app is External and in Testing, the connection expires afte
 
 ## Paid template
 
+None of the five free workflows follows up on a quote you sent, and none stops when the customer replies. The paid template does.
+
 **Gmail quote follow-up for n8n that stops when the customer replies.** $19, one-time payment.
 
-You send the quote from Gmail as usual. This n8n template adds it to your Google Sheet, follows up at most 3 times, and stops when the customer replies to your quote email. You never type a row.
+You send the quote from Gmail as usual. This n8n template adds it to your Google Sheet, follows up at most 3 times as replies in the same Gmail thread, only on the days and hours you set, and stops when the customer replies in that thread. You never type a row.
 
 - Picks up quotes by your Quote label or a PDF attachment, and saves each one to your sheet with its Gmail thread.
 - Reads the customer, quote number and total from the PDF with Google Gemini, on quotes of 1 to 3 pages. A total is kept only if it appears word for word in the PDF. If not, the row goes to `review`, you get an email, and nothing is sent until you check it.
