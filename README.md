@@ -105,6 +105,8 @@ Two short articles on the Small Hours blog, for people who build these flows for
 - [Detecting a client's reply in n8n: key on the Gmail thread ID, not a sheet column](https://smallhours.hashnode.dev/detecting-a-client-s-reply-in-n8n-key-on-the-gmail-thread-id-not-a-sheet-column): how to read the whole thread and tell the customer from yourself.
 - [Replying in the same Gmail thread from n8n: threadId, Message-ID and the Re: subject](https://smallhours.hashnode.dev/replying-in-the-same-gmail-thread-from-n8n-threadid-message-id-and-the-re-subject): how to send the follow-up as a reply under the quote instead of a new email.
 
+No n8n? A free quote tracker for Google Sheets, filled in by hand: [quote-tracker-google-sheets](https://github.com/smallhourstools/quote-tracker-google-sheets).
+
 ## License
 
 The five free workflows in this repository are released under the MIT License (see `LICENSE`). The paid template has its own license, included with the purchase.
